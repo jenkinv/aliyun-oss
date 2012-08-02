@@ -10,12 +10,10 @@ var fs = require('fs'),
 
 var ossAPI = require('../client');
 
-var option = {
-  accessId:'',
-  accessKey:''
+var options = {
+  accessId: '',
+  accessKey: ''
 };
-
-var oss = new ossAPI.OssClient(option);
 
 var argv = require('optimist')
       .alias('l', 'list')
@@ -24,6 +22,14 @@ var argv = require('optimist')
 
 var currentPath = fs.realpathSync('.');
 
+var KEY_PATH = './options.json';
+//load option
+try {
+  options = JSON.parse(fs.readFileSync(KEY_PATH));
+} catch(e){}
+
+
+var oss = new ossAPI.OssClient(options);
 
 var appLauncher = {
   command: argv._[0] ? argv._[0] : 'help',
@@ -33,8 +39,15 @@ var appLauncher = {
 runLauncher(appLauncher);
 
 function runLauncher(appLauncher) {
+  if(appLauncher.command != 'login' && (!options || !options.accessId || !options.accessKey)) {
+    console.log('please login first!.use [aliyun-oss login accessId accessKey]'.red);
+    return;
+  }
   //console.log('current path is [' + currentPath + ']');
   switch(appLauncher.command) {
+    case 'login':
+      doLogin(argv._[1], argv._[2]);
+      break;
     case 'ls':
       doListBuckets(appLauncher.list);break;
       break;
@@ -47,8 +60,16 @@ function runLauncher(appLauncher) {
   }
 }
 
+function doLogin(accessId, accessKey) {
+  var options = {accessId: accessId, accessKey: accessKey};
+  fs.writeFileSync(KEY_PATH, JSON.stringify(options));
+}
+
 function doListBuckets(isList) {
   oss.listBucket(function(err, list) {
+    if(err) {
+      console.log(err);return;
+    }
     var buckets = list['Buckets']['Bucket'];
     buckets.forEach(function(bucket) {
       if(isList) {
