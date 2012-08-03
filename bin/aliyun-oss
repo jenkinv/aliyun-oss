@@ -5,6 +5,7 @@
  */
 
 var fs = require('fs'),
+    util = require('util'),
     colors = require('colors'),
     datetime = require('datetime');
 
@@ -49,7 +50,7 @@ function runLauncher(appLauncher) {
       doLogin(argv._[1], argv._[2]);
       break;
     case 'ls':
-      doListBuckets(appLauncher.list);break;
+      doListBuckets(appLauncher.list, argv._[1]);break;
       break;
     case 'cp':
       doCopy(argv._[1], argv._[2]);
@@ -65,83 +66,142 @@ function doLogin(accessId, accessKey) {
   fs.writeFileSync(KEY_PATH, JSON.stringify(options));
 }
 
-function doListBuckets(isList) {
-  oss.listBucket(function(err, list) {
-    if(err) {
-      console.log(err);return;
-    }
-    var buckets = list['Buckets']['Bucket'];
-    buckets.forEach(function(bucket) {
-      if(isList) {
-        var date = datetime.format(new Date(bucket.CreationDate), '%Y/%m/%d %H:%M:%S');
-        console.log(date + '    ' + bucket.Name.blue.bold);
-      } else {
-        console.log(bucket.Name.blue.bold);
+function doListBuckets(isList, path) {
+  if(!path) { //list buckets
+    oss.listBucket(function(err, list) {
+      if(err) {
+        console.log(err);return;
       }
+      var buckets = list['Buckets']['Bucket'];
+      buckets.forEach(function(bucket) {
+        if(isList) {
+          var date = datetime.format(new Date(bucket.CreationDate), '%Y/%m/%d %H:%M:%S');
+          console.log(date + '    ' + bucket.Name.blue.bold);
+        } else {
+          console.log(bucket.Name.blue.bold);
+        }
+      });
     });
-  });
+  } else {//list files in one bucket
+    var path = normalizePath(path);
+    if(!path || !path.bucket) {
+      console.log('bucket is not set!'.red); return;
+    } else {
+      oss.listObject(path.bucket, path.path, null, '/', 100, function(err, result) {
+        if(err) {
+          console.log(err.red); return;
+        } else {
+          //console.log(result);
+          var objects = result['Contents'] || [],
+              groups  = result['CommonPrefixes'] || [];
+          if(!util.isArray(objects)) {
+            objects = [objects];
+          }
+          if(!util.isArray(groups)) {
+            groups = [groups];
+          }
+          for(var i=0, l=groups.length; i < l; i++) {
+            var group = groups[i]['Prefix'];
+            console.log(group.substring(path.path.length, group.length - 1).blue.bold);
+          }
+          for(var i=0, l=objects.length; i < l; i++) {
+            var objectKey = objects[i]['Key'];
+            var modifyDate = datetime.format(new Date(objects[i]['LastModified']), '%Y/%m/%d %H:%M:%S');
+            console.log((isList? modifyDate + '    ' :'') + objectKey.substring(path.path.length));
+          }
+        }
+        
+      });
+    }
+  }
+  
 }
 
 /**
  * COPY file between oss and local filesystem.
  *
  * src - local file path [/home/oss/text.txt] or
- *         oss file path [oss:/test/text.txt] 
+ *         oss file path [oss:test/text.txt] 
  * target - just as src
  */
 function doCopy(src, target) {
+  src = normalizePath(src);
+  target = normalizePath(target);
   if(!src || !target) {
-    console.log('you should input `cp src target`, oss path start with oss:'.red);
+    console.log('you should input `cp src target`, oss path start with bucketname:'.red);
     return;
   }
-  var regexp = /^([a-z0-9_\-]{1,16})?:?(.*)$/i;
-  var expResult = src.match(regexp);
-  var srcBucket = expResult[1],
-      srcPath = expResult[2];
-      srcFilename = srcPath.split('/').pop();
-
-      expResult = target.match(regexp);
-  var targetBucket = expResult[1],
-      targetPath = expResult[2],
-      targetFilename = targetPath.split('/').pop();
-  if(!targetFilename) {
-    targetFilename = srcFilename;
-    targetPath += targetFilename;
+  if(!target.filename) {//not set target filename, copy from src filename.
+    target.filename = src.filename;
+    target.path += src.filename;
   }
-  var isSrcOss = !!srcBucket,
-      isTargetOss = !!targetBucket;
 
-  if(!srcPath || !targetPath) {
-    console.log('path is not valid'.red);
-    return;
-  }
+  var isSrcOss = !!src.bucket,
+      isTargetOss = !!target.bucket;
+
+
   if(!isSrcOss && !isTargetOss) {
     console.log('no oss path found!'.red);
     return;
   }
 
   if(isSrcOss && isTargetOss) {//copy object innner oss
-    return;
-  }
-
-  if(isSrcOss && !isTargetOss) {//download file from oss
-    oss.getObject(srcBucket, srcPath, targetPath,function(err){
+    if(!src.bucket || src.bucket != target.bucket) {
+      console.log('CANN\'T copy file between different bucket!'.red);return;
+    }
+    oss.copyObject(src.bucket, target.path, src.path, function(err) {
       if(err) {
         console.log(err);
       } else {
         console.log('copy file succ.'.green);
       }
     });
+  }
+
+  if(isSrcOss && !isTargetOss) {//download file from oss
+    oss.getObject(src.bucket, src.path, target.path, function(err){
+      if(err) {
+        console.log(err);
+      } else {
+        console.log('download file succ.'.green);
+      }
+    });
     return;
   }
 
   if(!isSrcOss && isTargetOss) {//upload file to oss
-    
+    oss.putObject(target.bucket, target.path, src.path, function(err) {
+      if(err) {
+        console.log(err);
+      } else {
+        console.log('upload file succ.'.green);
+      }
+    });
     return;
   }
+}
 
-
-
-
-
+/**
+ * normalize the path. 
+ * oss path sample is 'buckname:test/hello.txt'
+ * local path sample is '/home/jen/world.txt'
+ * return {bucket: path: filename: origin}
+ */
+function normalizePath(filepath) {
+  if(!filepath) return null;
+  var regexp = /^(?:([a-z0-9_\-]{1,16}):)?(.*)$/i,
+      expResult = filepath.match(regexp),
+      bucket = expResult[1],
+      path = expResult[2]||'',
+      filename = path.split('/').pop();
+  if(!!bucket) {//change bucketname:/test/hello.txt to bucketname:text/hello.txt
+    path = path.replace(/^\/+/, '');
+  }
+  if(!bucket && !path) {
+    console.log((filepath + ' is not valid path.').red);
+    return null;
+  } else {
+    return {bucket: bucket, path: path, filename: filename, origin: filepath};
+  }
+  
 }
