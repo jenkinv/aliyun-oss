@@ -318,6 +318,12 @@ OssClient.prototype.getBucketAcl = function (bucket, callback) {
   this.doRequest(method, null, ossParams, callback);
 };
 
+/**
+ * set bucket acl
+ * @param bucket {String}
+ * @param acl {String} 'private' or 'public-read' or 'public-read-write'
+ * @param callback {Function}
+ **/
 OssClient.prototype.setBucketAcl = function (bucket, acl, callback) {
   if (!bucket || !acl) {
     throw new Error('error arguments!');

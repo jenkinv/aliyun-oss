@@ -24,6 +24,7 @@ var argv = require('optimist')
 var currentPath = fs.realpathSync('.');
 
 var KEY_PATH = './options.json';
+var ACL_VALUES = ['private', 'public-read', 'public-read-write'];
 //load option
 try {
   options = JSON.parse(fs.readFileSync(KEY_PATH));
@@ -55,6 +56,9 @@ function runLauncher(appLauncher) {
     case 'cp':
       doCopy(argv._[1], argv._[2]);
       break;
+    case 'chmod':
+      doAclChange(argv._[1], argv._[2]);//bucket, aclValue
+      break;
     case 'help':
     default:
       console.log('output help info.');
@@ -64,6 +68,18 @@ function runLauncher(appLauncher) {
 function doLogin(accessId, accessKey) {
   var options = {accessId: accessId, accessKey: accessKey};
   fs.writeFileSync(KEY_PATH, JSON.stringify(options));
+}
+
+function formatWithSpaces(string, length) {
+  var slength = string.length;
+  if(slength < length) {
+    var spaceCount = (length - slength);
+    while(spaceCount > 0) {
+      spaceCount--;
+      string += ' ';
+    }
+  } 
+  return string;
 }
 
 function doListBuckets(isList, path) {
@@ -76,7 +92,9 @@ function doListBuckets(isList, path) {
       buckets.forEach(function(bucket) {
         if(isList) {
           var date = datetime.format(new Date(bucket.CreationDate), '%Y/%m/%d %H:%M:%S');
-          console.log(date + '    ' + bucket.Name.blue.bold);
+          oss.getBucketAcl(bucket.Name, function(err, result) {
+            console.log('%s    %s    %s', date, formatWithSpaces(result['AccessControlList']['Grant'], 17), bucket.Name.blue.bold);
+          });
         } else {
           console.log(bucket.Name.blue.bold);
         }
@@ -179,6 +197,27 @@ function doCopy(src, target) {
     });
     return;
   }
+}
+
+function doAclChange(bucket, aclValue) {
+  if(!bucket || aclValue === undefined || aclValue === '') {
+    console.log('param error. check as `chmod bucket aclValue`'.red);
+    return;
+  }
+  if(ACL_VALUES.indexOf(aclValue) == -1) {
+    aclValue = ACL_VALUES[aclValue];
+  }
+  if(!aclValue) {
+    console.log('pls input right aclValue.It\'s private,public-read or public-read-write'.red);
+    return;
+  }
+  oss.setBucketAcl(bucket, aclValue, function(err, result){
+    if(err) {
+      console.log(err.red);
+    } else {
+      console.log(result.green);
+    }
+  });
 }
 
 /**
