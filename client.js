@@ -117,7 +117,7 @@ OssClient.prototype.getUrl = function (ossParams) {
     params.push('marker=' + ossParams['marker']);
   }
 
-  if (typeof ossParams['maxKeys'] === 'string') {
+  if (typeof ossParams['maxKeys'] === 'string' || typeof ossParams['maxKeys'] === 'number') {
     params.push('max-keys=' + ossParams['maxKeys']);
   }
 

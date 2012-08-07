@@ -7,7 +7,8 @@
 var fs = require('fs'),
     util = require('util'),
     colors = require('colors'),
-    datetime = require('datetime');
+    datetime = require('datetime'),
+    step = require('step');
 
 var ossAPI = require('../client');
 
@@ -18,6 +19,7 @@ var options = {
 
 var argv = require('optimist')
       .alias('l', 'list')
+      .alias('r', 'recursive')
       .argv;
 
 
@@ -35,7 +37,8 @@ var oss = new ossAPI.OssClient(options);
 
 var appLauncher = {
   command: argv._[0] ? argv._[0] : 'help',
-  list: argv.list
+  list: argv.list,
+  recursive: argv.recursive
 };
 
 runLauncher(appLauncher);
@@ -55,6 +58,9 @@ function runLauncher(appLauncher) {
       break;
     case 'cp':
       doCopy(argv._[1], argv._[2]);
+      break;
+    case 'rm':
+      doDelete(argv._[1], appLauncher.recursive);
       break;
     case 'chmod':
       doAclChange(argv._[1], argv._[2]);//bucket, aclValue
@@ -89,6 +95,9 @@ function doListBuckets(isList, path) {
         console.log(err);return;
       }
       var buckets = list['Buckets']['Bucket'];
+      if(!util.isArray(buckets) && !!buckets) {
+        buckets = [buckets];
+      } 
       buckets.forEach(function(bucket) {
         if(isList) {
           var date = datetime.format(new Date(bucket.CreationDate), '%Y/%m/%d %H:%M:%S');
@@ -199,6 +208,91 @@ function doCopy(src, target) {
   }
 }
 
+/**
+ * delete bucket or object
+ * @param path {String} path 
+ * @param resursive {Boolean} whether delete all the objects the bucket contains, otherwise results failure when bucket is not empy.
+ */
+function doDelete(path, recursive) {
+  var path = normalizePath(path);
+  if(!path || !path.bucket) {//bucket must exists.
+    console.log('param error. bucket must exist. check as `rm bucket:[object]`'.red);
+    return;
+  }
+  if(!path.path) { //delete bucket
+    function deleteEmptyBucket(bucket) {
+      oss.deleteBucket(bucket, function(err) {
+        if(err) {
+          console.log(err);
+        }
+      });
+    }
+    if(!!recursive) {
+      step(
+        function getAllObjects() {
+          listAllObjects(path.bucket, null, this);
+        },
+        function deleteAllObjects(err, objects) {
+          var that = this;
+          if(err) {
+            console.log(err.red);
+            return;
+          }
+          objects.forEach(function(object) {
+            oss.deleteObject(path.bucket, object['Key'], that.group());
+          });
+        },
+        function deleteBucket(err) {
+          if(err) {
+            console.log(err.red);
+            return;
+          } else {
+            deleteEmptyBucket(path.bucket);
+          }
+        }
+      );
+    } else {
+      deleteEmptyBucket(path.bucket);
+    }
+  } else { //delete object
+    oss.deleteObject(path.bucket, path.path, function(err) {
+      if(err) {
+        console.log(err.red);return;
+      }
+    });
+  }
+}
+
+function listAllObjects(bucket, marker, callback) {
+  var target = callback;
+  if(!target.__list || !marker) target.__list = [];
+  oss.listObject(bucket, null, marker, null, 2, function(err, result) {
+    if(err) {
+      callback(err);
+      return;
+    }
+    var nextMarker = result['NextMarker'];
+    var objects = result['Contents'] || [];
+    if(util.isArray(objects)) {
+      target.__list = target.__list.concat(objects);
+    } else {
+      target.__list.push(objects);
+    }
+    if(nextMarker) {
+      listAllObjects(bucket, nextMarker, callback);
+    } else {
+      callback(null, target.__list);
+    }
+  });
+}
+
+/**
+ * change bucket acl.
+ * acl-value is one of private,public-read,public-read-write
+ * also acept 0,1,2 as acl-value's shortcut key
+ * @param bucket {String} bucket name
+ * @param aclValue {String} private|public-read|public-read-write|0|1|2
+ */
 function doAclChange(bucket, aclValue) {
   if(!bucket || aclValue === undefined || aclValue === '') {
     console.log('param error. check as `chmod bucket aclValue`'.red);
@@ -228,7 +322,7 @@ function doAclChange(bucket, aclValue) {
  */
 function normalizePath(filepath) {
   if(!filepath) return null;
-  var regexp = /^(?:([a-z0-9_\-]{1,16}):)?(.*)$/i,
+  var regexp = /^(?:([a-z0-9_\-]{1,100}):)?(.*)$/i,
       expResult = filepath.match(regexp),
       bucket = expResult[1],
       path = expResult[2]||'',
